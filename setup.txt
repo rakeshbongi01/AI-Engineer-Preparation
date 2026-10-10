@@ -1,0 +1,15 @@
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+python3 -m pip install --upgrade pip
+
+
+
+
+
+=====
+Lazy Push:
+
+git config --global alias.cmp '!f() { git add . && git commit -m "$1" && git push; }; f'
+git cmp "findoc-rag"

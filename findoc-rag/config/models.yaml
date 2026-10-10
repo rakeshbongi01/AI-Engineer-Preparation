@@ -1,0 +1,4 @@
+default_model: gpt-4o-mini
+models:
+  gpt-4o-mini: {input_per_1m: 0.15, output_per_1m: 0.60}
+  gpt-4o: {input_per_1m: 2.50, output_per_1m: 10.00}

@@ -1,0 +1,7 @@
+#findoc-rag
+openai 
+tiktoken 
+pypdf 
+python-dotenv 
+pyyaml 
+tenacity
