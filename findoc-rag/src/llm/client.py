@@ -23,9 +23,9 @@ RETRYABLE = (RateLimitError, APITimeoutError, APIConnectionError)
 
 @retry(retry=retry_if_exception_type(RETRYABLE), wait=wait_random_exponential(min=1, max=30), stop=stop_after_attempt(6))
 
-def chat(messages, model=None, temperature=0.0, max_tokens=512, stream=False, tag=""):
+def chat(messages, model=None, temperature=0.0, max_tokens=512, stream=False, tag=""):      
     model = model or CFG["default_model"]
-    t0 = time.perf_counter(); ttft = None; text = []; usage =None; Finish = None
+    t0 = time.perf_counter(); ttft = None; text = []; usage =None; finish = None
     kwargs = dict(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
 
     if stream:

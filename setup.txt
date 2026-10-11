@@ -14,4 +14,3 @@ Lazy Push:
 git config --global alias.cmp '!f() { git add . && git commit -m "$1" && git push; }; f'
 git cmp "findoc-rag"
 
-python3 -m scripts.day01_tokens data/raw/findoc-rag/data/raw/HAL_AR-2025-26.pdf

@@ -1,4 +1,4 @@
-# scripts/day01_tokens.py (run from repo root: python -m scripts.day01_tokens data/raw/<file>.pdf)
+# scripts/day01_tokens.py (run from repo root: python -m scripts.day01_tokens /Users/rakesh/Documents/Learning/AI-Engineer-Preparation/findoc-rag/data/raw/HAL_AR-2025-26.pdf)
 import sys, json, statistics, tiktoken
 from pypdf import PdfReader
 from src.llm.client import chat, _cost
@@ -13,7 +13,8 @@ ratios = [len(p) / max(1,n) for p,n in zip(pages, counts) if n > 50 ]
 
 print(f"pages={len(pages)} total_tokens={sum(counts):,} "
       f"avg chars/token={statistics.mean(ratios):.2f}")
-worst = sorted(range(len(pages)), key = lambda i: len(pages[i]) / max(1, counts[i]))[:3]
+worst = sorted([i for i in range(len(pages)) if counts[i] > 200],
+               key=lambda i: len(pages[i]) / counts[i])[:3]
 
 print("lowest chars/token pages (likely tables):", [w + 1 for w in worst])
 print("cost to send WHOLE report as input once: $",
