@@ -11,7 +11,7 @@ class Metric(BaseModel):
                                    "Do not conert or compute. null if not found.")
 
 
-class Financials(BaseModel):
+class FinancialSnapshot(BaseModel):
     company: str
     fiscal_year: str = Field(description = "Fiscal year the figure belongs to, format FY2025-26")
     currency: Literal["USD", "INR"]
