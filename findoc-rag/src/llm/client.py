@@ -1,62 +1,106 @@
-import json, os, time, uuid, yaml
+"""Instrumented LLM client: one place for model params, retries, and cost/latency logging."""
+import json
+import time
+import uuid
 from pathlib import Path
+
+import yaml
 from dotenv import load_dotenv
-from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
-from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
+from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
 load_dotenv()
 
 CFG = yaml.safe_load(Path("config/models.yaml").read_text())
-LOG = Path("logs/llm_calls.jsonl"); LOG.parent.mkdir(exist_ok=True, parents=True)
+LOG_PATH = Path("logs/llm_calls.jsonl")
+LOG_PATH.parent.mkdir(exist_ok=True)
 
-CLIENT = OpenAI() # reads OPENAI_API_KEY from the environment
-
-def _cost(model, p_tok, c_tok):
- price = CFG["models"].get(model, {"input_per_1m": 0, "output_per_1m": 0})
- return (p_tok * price["input_per_1m"] + c_tok * price["output_per_1m"]) / 1_000_000
-
-def _log(rec):
- with LOG.open("a") as f:
-  f.write(json.dumps(rec) + "\n")
-
+CLIENT = OpenAI(max_retries=0)          # reads OPENAI_API_KEY; tenacity owns retries (no double retry)
 RETRYABLE = (RateLimitError, APITimeoutError, APIConnectionError)
+DEFAULT_REASONING_EFFORT = "low"
 
-@retry(retry=retry_if_exception_type(RETRYABLE), wait=wait_random_exponential(min=1, max=30), stop=stop_after_attempt(6))
 
-def chat(messages, model=None, temperature=0.0, max_tokens=512, stream=False, tag=""):      
+def build_params(model: str, temperature: float, max_tokens: int,
+                 reasoning_effort: str | None = None) -> dict:
+    """Model-specific request parameters, driven by config/models.yaml.
+
+    - Reasoning models take reasoning_effort instead of temperature.
+    - max_completion_tokens works for every model; on reasoning models it must also
+      cover the hidden reasoning tokens, so size it generously.
+    - reasoning_effort overrides the configured default (e.g. "none" for tool calls).
+    """
+    spec = CFG["models"].get(model, {})
+    params: dict = {"model": model, "max_completion_tokens": max_tokens}
+    if spec.get("reasoning"):
+        params["reasoning_effort"] = reasoning_effort or spec.get(
+            "reasoning_effort", DEFAULT_REASONING_EFFORT)
+    else:
+        params["temperature"] = temperature
+    return params
+
+
+def _cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    price = CFG["models"].get(model, {})
+    return (prompt_tokens * price.get("input_per_1m", 0)
+            + completion_tokens * price.get("output_per_1m", 0)) / 1_000_000
+
+
+def _log(record: dict) -> None:
+    """One JSON line per call. Metrics only - never raw prompts (PII / confidential data)."""
+    with LOG_PATH.open("a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _reasoning_tokens(usage) -> int:
+    details = getattr(usage, "completion_tokens_details", None)
+    return (getattr(details, "reasoning_tokens", 0) or 0) if details else 0
+
+
+@retry(retry=retry_if_exception_type(RETRYABLE),
+       wait=wait_random_exponential(min=1, max=30), stop=stop_after_attempt(5))
+def chat(messages: list[dict], model: str | None = None, temperature: float = 0.0,
+         max_tokens: int = 2000, stream: bool = False, tag: str = "",
+         reasoning_effort: str | None = None) -> tuple[str, dict]:
+    """Send a chat request; return (text, log record)."""
     model = model or CFG["default_model"]
-    t0 = time.perf_counter(); ttft = None; text = []; usage =None; finish = None
-    kwargs = dict(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
+    kwargs = dict(messages=messages, **build_params(model, temperature, max_tokens, reasoning_effort))
+    started = time.perf_counter()
+    ttft, parts, usage, finish = None, [], None, None
 
     if stream:
-        resp = CLIENT.chat.completions.create(**kwargs,stream=True, stream_options= {"include_usage": True})
-        for chunk in resp:
+        response = CLIENT.chat.completions.create(**kwargs, stream=True,
+                                                  stream_options={"include_usage": True})
+        for chunk in response:
             if chunk.choices:
                 delta = chunk.choices[0].delta.content
                 if delta:
                     if ttft is None:
-                        ttft = time.perf_counter() - t0
-                        text.append(delta); print(delta, end="", flush=True)
-                    finish = chunk.choices[0].finish_reason or finish
-            if chunk.usage:
-                usage = chunk.usage # final chunk carries usage
+                        ttft = time.perf_counter() - started
+                    parts.append(delta)
+                    print(delta, end="", flush=True)
+                finish = chunk.choices[0].finish_reason or finish
+            if chunk.usage:                      # the final chunk carries usage
+                usage = chunk.usage
         print()
-
     else:
-       resp = CLIENT.chat.completions.create(**kwargs)
-       text.append(resp.choices[0].message.content)
-       usage, finish = resp.usage, resp.choices[0].finish_reason
-    total = time.perf_counter() - t0
-    p_tok, c_tok = usage.prompt_tokens, usage.completion_tokens
-    rec = {"id": str(uuid.uuid4()), "ts": time.time(), "tag": tag, "model": model,
-    "stream": stream, "temperature": temperature,
-    "prompt_tokens": p_tok, "completion_tokens": c_tok,
-    "ttft_s": round(ttft, 3) if ttft else None, "total_s": round(total, 3),
-    "tps": round(c_tok / (total - (ttft or 0)), 1) if c_tok and total > (ttft or 0) else None,
-    "finish_reason": finish, "cost_usd": round(_cost(model, p_tok, c_tok), 6)}
+        response = CLIENT.chat.completions.create(**kwargs)
+        parts.append(response.choices[0].message.content or "")
+        usage, finish = response.usage, response.choices[0].finish_reason
 
-    _log(rec)
-
+    total = time.perf_counter() - started
+    prompt_tokens = usage.prompt_tokens if usage else 0
+    completion_tokens = usage.completion_tokens if usage else 0
+    generation_s = total - (ttft or 0)
+    record = {
+        "id": str(uuid.uuid4()), "ts": time.time(), "tag": tag, "model": model, "stream": stream,
+        "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+        "reasoning_tokens": _reasoning_tokens(usage) if usage else 0,
+        "ttft_s": round(ttft, 3) if ttft else None, "total_s": round(total, 3),
+        "tps": round(completion_tokens / generation_s, 1) if completion_tokens and generation_s > 0 else None,
+        "finish_reason": finish,
+        "cost_usd": round(_cost(model, prompt_tokens, completion_tokens), 6),
+    }
+    _log(record)
     if finish == "length":
-        print(f"Warning: model {model} hit max_tokens limit ({max_tokens})")
-    return "".join(text), rec
+        print(f"[warn] output truncated at max_completion_tokens={max_tokens}")
+    return "".join(parts), record
