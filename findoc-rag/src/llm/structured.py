@@ -13,7 +13,7 @@ def extract(messages, schema, validate=None, model=None, max_attempts=3, max_tok
     for attempt in range(1, max_attempts+1):
         t0 = time.perf_counter()
         try:
-            resp = CLIENT.chat.complettions.parse(
+            resp = CLIENT.chat.completions.parse(
                 model = model, messages = msgs, response_format = schema, temperature = 0, max_tokens = max_tokens
             )
         except LengthFinishReasonError as e:                       # parse() raises this on finish_reason="length"

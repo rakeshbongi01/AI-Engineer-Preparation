@@ -1,0 +1,22 @@
+{
+  "company": "Hindustan Aeronautics Limited",
+  "fiscal_year": "FY2025-26",
+  "currency": "INR",
+  "unit": "lakh",
+  "basis": "standalone",
+  "revenue_from_operations": {
+    "evidence": "Revenue from Operations 33,08,979",
+    "source_page": 36,
+    "value": 3308979.0
+  },
+  "profit_after_tax": {
+    "evidence": null,
+    "source_page": null,
+    "value": null
+  },
+  "order_book": {
+    "evidence": "Order Book position of the Company stands at ` 2,54,53,848 Lakh",
+    "source_page": 36,
+    "value": 25453848.0
+  }
+}

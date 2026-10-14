@@ -74,7 +74,7 @@ def grounding_errors(snapshot: FinancialSnapshot, pages: list[str], allowed: set
          errors.append(f"{name}: source_page {metric.source_page} was not in the context")
          continue
       page_text = normalize(pages[page_idx])
-      if not metric.evidance or not _quote_on_page(metric.evidence, page_text):
+      if not metric.evidence or not _quote_on_page(metric.evidence, page_text):
          errors.append(f"{name}: evidence is not a verbatim quote from page {metric.source_page}")
       if _value_on_page(metric.value, page_text):
          errors.append(f"{name}: value {metric.value} does not appear on page {metric.source_page}")
@@ -85,3 +85,47 @@ def grounding_errors(snapshot: FinancialSnapshot, pages: list[str], allowed: set
    if revenue is not None and pat is not None and pat>=revenue:
       errors.append("profit_after_tax must be smaller than revenue_from_operations")
    return errors
+
+def build_messages(context: str) -> list[dict]:
+   user = (F"<context>\n{context}\n</context>\n\n"
+           "Extract the financial snapshot for the latest fiscal year in this report.")
+   return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content":user}]
+
+def write_file(path: Path, content: str) -> None:
+   path.parent.mkdir(parents=True, exist_ok=True)
+   path.write_text(content)
+
+
+
+def main() -> int:
+   parser = argparse.ArgumentParser(description="Extract a grounded financial report")
+   parser.add_argument("pdf", type=Path, help=" Path to the Annual report PDF")
+   args = parser.parse_args()
+
+   pages = load_pages(args.pdf)
+   selected = select_pages(pages)
+   if not selected:
+      log.error(" no page mathed the keywords - nothing to extract")
+      return 1
+   log. info ("pages sent: %s", [idx + 1 for idx in selected])
+
+   try:
+      snapshot = extract(
+        build_messages(build_context (pages, selected)) ,
+        FinancialSnapshot,
+        validate=partial(grounding_errors, pages=pages, allowed=set (selected)),
+        tag="day02_extract", 
+        prompt_version=PROMPT_VERSION,
+      )
+   except ExtractionError as exc:                          # never write unvalidated data
+      write_file(QUARANTINE_PATH, str (exc))
+      log.error ("quarantined: %s", exc)
+      return 2
+
+   write_file(OUTPUT_PATH, snapshot.model_dump_json(indent=2))
+   log.info("saved %s", OUTPUT_PATH)
+   print (snapshot.model_dump_json(indent=2))
+   return 0
+
+if __name__ == "__main__":
+   sys.exit(main())
