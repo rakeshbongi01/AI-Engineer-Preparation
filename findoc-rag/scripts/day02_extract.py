@@ -37,6 +37,51 @@ def load_pages(pdf_path:Path) -> list[str]:
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
     return [page.extract_text() or "" for page in PdfReader(pdf_path).pages]
 
+def keyword_score(page_text: str) -> int:
+ text = normalize(page_text) # normalise once per page
+ return sum(text.count(keyword) for keyword in KEYWORDS)
+
 def select_pages(pages: list[str], k: int = TOP_K_PAGES) -> list[int]:
     """Naive retrieval: 0-based indexes of the k pages with most keyword hits, in page order.Replaced by vector / hybrid search in later days."""
-    scored = [(keyword_score(text), )]
+    scored = [(keyword_score(text), idx) for idx, text in enumerate(pages)]
+    scored.sort(reverse=True)
+    return sorted (idx for score, idx in scored[:k] if score > 0)
+
+def build_context(pages: list[str], page_indexes:list[int])->str:
+   blocks = [f"[PAGE {idx+1}]\n{pages[idx][:MAX_CHARS_PER_PAGE]}" for idx in page_indexes]
+   return "\n\n".join(blocks)
+
+def _quote_on_page(quote: str, page_text:str)->bool:
+   """Verbatim check that tolerates whitespace, case and thousands-separator differences."""
+   return normalize(quote).replace(",", "") in page_text.replace(",","")
+
+def _value_on_page(value: float, page_text:str) -> bool:
+   """True if the number appears on the page in a common print format (commas removed)."""
+   digits_only = page_text.replace(",", "")
+   candidates = {f"{value: .2f}", f"{value:.1f}", f"{value:g}"}
+   return any(candidate in digits_only for candidate in candidates)
+
+def grounding_errors(snapshot: FinancialSnapshot, pages: list[str], allowed: set[int])-> list[str]:
+   """Business validation: every reported value must be traceable to its cited page."""
+   errors : list[str] = []
+   for name in METRICS:
+      metric = getattr(snapshot, name)
+      if metric.value is None:
+         continue
+      page_idx = (metric.source_page or 0 ) - 1
+
+      if page_idx not in allowed:
+         errors.append(f"{name}: source_page {metric.source_page} was not in the context")
+         continue
+      page_text = normalize(pages[page_idx])
+      if not metric.evidance or not _quote_on_page(metric.evidence, page_text):
+         errors.append(f"{name}: evidence is not a verbatim quote from page {metric.source_page}")
+      if _value_on_page(metric.value, page_text):
+         errors.append(f"{name}: value {metric.value} does not appear on page {metric.source_page}")
+
+   revenue = snapshot.revenue_from_operations.value
+   pat = snapshot.profit_after_tax.value
+
+   if revenue is not None and pat is not None and pat>=revenue:
+      errors.append("profit_after_tax must be smaller than revenue_from_operations")
+   return errors
