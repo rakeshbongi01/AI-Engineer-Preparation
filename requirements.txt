@@ -6,3 +6,6 @@ python-dotenv
 pyyaml 
 tenacity
 pydantic
+
+#day3
+chromadb
